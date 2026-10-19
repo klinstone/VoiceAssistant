@@ -151,6 +151,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -218,3 +220,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# Project-specific (VoiceAssistant)
+# ============================================================
+
+# Runtime cache (HuggingFace и прочее)
+cache/
+
+# История диалогов — пользовательские данные, не публикуем
+sessions/
+
+# Локальная модель Vosk (скачивается отдельно, большая)
+vosk_model/
+
+# Логи работы приложения
+assistant.log
+*.log
+
+# Локальные секреты
+.env
+.env.*
+
+# Автогенерируемый список моделей Silero (см. комментарий ниже)
+# Если файл нужен в репозитории — удалите эту строку
+latest_silero_models.yml
+
+# ОС / IDE
+.DS_Store
+Thumbs.db
