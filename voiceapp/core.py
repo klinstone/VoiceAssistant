@@ -4,13 +4,15 @@ import collections
 import json
 import queue
 import re
+import threading
 import time
 import traceback
 
 from . import config as cfg
 from . import settings
-from .audio import Mic, Speaker, chime_reset, chime_start, chime_stop, load_tts
+from .audio import Mic, Speaker, chime_alarm, chime_reset, chime_start, chime_stop, load_tts
 from .log import log
+from .reminders import SCHEDULER
 from .stt import load_asr, transcribe
 from .text_utils import HAS_NUM2WORDS, fuzzy_contains, norm_text, split_after_phrase
 
@@ -25,7 +27,10 @@ class Assistant:
         self.tray = tray
         self.brain = None
         self.asr = None
+        self.speaker = None
         self.ignore_until = 0.0
+        self.alarm_stop = threading.Event()     # «хватит повторять сигнал таймера»
+        self.chiming = threading.Event()        # идёт сигнал таймера (его не надо записывать как речь)
         self.wake_re = re.compile(
             r"^\W*" + r"\W+".join(map(re.escape, cfg.WAKE_PHRASE.split())) + r"\W*", re.I)
 
@@ -37,6 +42,40 @@ class Assistant:
         if self.brain:
             self.brain.reset()
         log("Контекст диалога сброшен.")
+
+    def silence(self):
+        """Остановить озвучку и повторы сигнала таймера (пункт «Остановить звук» в трее, кодовое слово)."""
+        self.alarm_stop.set()
+        if self.speaker is not None:
+            self.speaker.stop()
+
+    # ---------------------------- таймеры ----------------------------
+    def on_alarm(self, item, late=False):
+        """Сработал таймер или напоминание (вызывается из потока планировщика, модель не участвует)."""
+        label = (item.get("label") or "").strip()
+        head = "Пропущенное напоминание." if late else ("Таймер сработал." if item.get("kind") == "timer" else "Напоминание.")
+        text = head + (f" {label}." if label else "")
+        log("Сработало:", text)
+        if self.tray:
+            self.tray.notify(label or head)
+        self.alarm_stop.clear()
+        repeats = max(1, int(settings.get("ALARM_REPEATS")))
+        for i in range(repeats):
+            if self.alarm_stop.is_set():
+                break
+            try:
+                self.chiming.set()
+                try:
+                    chime_alarm()
+                finally:
+                    self.chiming.clear()
+                if self.speaker is not None:
+                    self.speaker.say(text)
+                    self.speaker.wait()
+            except Exception:
+                traceback.print_exc()
+            if i < repeats - 1 and self.alarm_stop.wait(settings.get("ALARM_GAP")):
+                break
 
     # ---------------------------- загрузка ----------------------------
     def load(self, llm=True):
@@ -62,6 +101,10 @@ class Assistant:
             self.brain = Brain()
 
     # ---------------------------- запись фразы ----------------------------
+    def _others_sounding(self):
+        """Сейчас звучит не пользователь (озвучка, сигнал таймера): такое не записываем."""
+        return self.chiming.is_set() or (self.speaker is not None and self.speaker.busy())
+
     def record(self, mic, first_timeout, preroll=None):
         """Пишет фразу. Заканчивает, когда cfg.END_SILENCE секунд нет новых слов.
         preroll: уже записанные блоки звука (то, что вы успели сказать вместе с кодовым словом).
@@ -77,21 +120,29 @@ class Assistant:
             try:
                 data = mic.get(1.0)
             except queue.Empty:
-                continue
-            frames.append(data)
+                data = None            # микрофон молчит: таймауты всё равно проверяем (раньше тут был вечный цикл)
             now = time.time()
-            if rec.AcceptWaveform(data):
-                t = json.loads(rec.Result()).get("text", "")
-                if t:
-                    segments.append(t)
-                    started, last_act, last_idx = True, now, len(frames)
-                partial = ""
-            else:
-                p = json.loads(rec.PartialResult()).get("partial", "")
-                if p != partial:
-                    partial = p
-                    if p:
+            if data is not None:
+                if self._others_sounding():
+                    # например, сработал таймер: чужой голос в запись не берём, начинаем запись заново
+                    rec.Reset()
+                    frames, segments, partial, started = [], [], "", False
+                    t0 = last_act = now
+                    last_idx, max_len = 0, cfg.MAX_RECORD
+                    continue
+                frames.append(data)
+                if rec.AcceptWaveform(data):
+                    t = json.loads(rec.Result()).get("text", "")
+                    if t:
+                        segments.append(t)
                         started, last_act, last_idx = True, now, len(frames)
+                    partial = ""
+                else:
+                    p = json.loads(rec.PartialResult()).get("partial", "")
+                    if p != partial:
+                        partial = p
+                        if p:
+                            started, last_act, last_idx = True, now, len(frames)
             if not started:
                 if now - t0 > first_timeout:
                     return None, ""
@@ -156,12 +207,14 @@ class Assistant:
                 chime_reset()
                 return
             try:
-                self.brain.ask(text, self.speaker)  # ответ печатается и озвучивается потоком
+                answer = self.brain.ask(text, self.speaker)  # ответ печатается и озвучивается потоком
             except Exception as e:
                 log(f"Ошибка LLM: {e}")
                 self.speaker.say("Не получилось связаться с моделью.")
                 self.speaker.wait()
                 return
+            if not answer:                          # раньше в этом случае ассистент молча замолкал
+                self.speaker.say("Не получилось сформулировать ответ.")
             self.state("speaking", "говорю")
             self.speaker.wait()
             time.sleep(0.4)                         # даём затихнуть эху комнаты
@@ -214,9 +267,24 @@ class Assistant:
                         items.append(w)
         return json.dumps([*items, "[unk]"], ensure_ascii=False)
 
+    def _reopen_mic(self, old):
+        """Микрофон перестал присылать звук (Bluetooth-гарнитура уснула, устройство переподключили)."""
+        log("Микрофон перестал передавать звук, переоткрываю...")
+        old.close()
+        try:
+            m = Mic()
+            m.start()
+            return m
+        except Exception as e:
+            log(f"Не удалось открыть микрофон: {e}")
+            time.sleep(3)
+            return old
+
     def run(self):
         from vosk import KaldiRecognizer
         self.load()
+        SCHEDULER.set_handler(self.on_alarm)        # таймеры и напоминания будут озвучиваться отсюда
+        SCHEDULER.start()
         mic = Mic()
         mic.start()
         wake = KaldiRecognizer(self.vosk, cfg.SAMPLE_RATE, self.wake_grammar())
@@ -229,11 +297,16 @@ class Assistant:
         mic.drain()
         self.state("ready", f"жду «{cfg.WAKE_PHRASE}»")
         log(f"Готово. Скажите: «{cfg.WAKE_PHRASE}» (или «{cfg.NEW_SESSION_PHRASES[0]}» для сброса контекста)")
+        last_data = time.time()
         while not self.stop.is_set():
             try:
                 data = mic.get(0.5)
             except queue.Empty:
+                if time.time() - last_data > 5:
+                    mic = self._reopen_mic(mic)
+                    last_data = time.time()
                 continue
+            last_data = time.time()
             ring.append(data)
             if wake.AcceptWaveform(data):
                 heard = json.loads(wake.Result()).get("text", "")
@@ -259,6 +332,7 @@ class Assistant:
                 mic.drain()
                 continue
             log("Кодовое слово!")
+            self.silence()                          # если звенел таймер, сигнал прекращаем
             try:
                 self.conversation(mic, preroll=preroll)
             except Exception:
@@ -266,6 +340,7 @@ class Assistant:
             mic.drain()
             wake.Reset()
             ring.clear()
+            last_data = time.time()
             self.ignore_until = time.time() + cfg.IGNORE_AFTER_DIALOG
             self.state("ready", f"жду «{cfg.WAKE_PHRASE}»")
 

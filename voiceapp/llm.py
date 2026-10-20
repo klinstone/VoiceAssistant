@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
 """Общение с моделью через OpenRouter: потоковый ответ, инструменты, история и сохранение диалогов."""
 import json
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import config as cfg
 from . import sessions, settings
 from .chat_prompt import build_chat_prompt
+from .client import make_client
 from .log import log
 from .prompt import build_system_prompt
 from .text_utils import Chunker
-from .tools import TOOLS, run_tool
-
-STATUS = {"web_search": "Ищу в интернете…", "get_weather": "Смотрю погоду…",
-          "get_exchange_rate": "Проверяю курс…"}
+from .tools import FAST_TOOLS, STATUS, TOOLS, run_tool
 
 
 class _StreamPrinter:
@@ -40,13 +37,7 @@ class Brain:
     mode="chat": текстовый чат (потоковый вывод в окно)."""
 
     def __init__(self, mode="voice"):
-        from dotenv import load_dotenv
-        from openai import OpenAI
-        load_dotenv(cfg.BASE / ".env")
-        key = os.getenv("OPENROUTER_API_KEY", "").strip()
-        if not key or "ваш_ключ" in key:
-            raise RuntimeError("В файле .env не найден настоящий OPENROUTER_API_KEY.")
-        self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=key, timeout=40)
+        self.client = make_client(timeout=40)
         self.mode = mode
         self.history = []
         self.session = None
@@ -124,7 +115,7 @@ class Brain:
         for _ in range(cfg.MAX_TOOL_CALLS + 2):
             kwargs = dict(model=cfg.LLM_MODEL, messages=messages, stream=True, temperature=0.7,
                           max_tokens=1500, extra_body=self._extra())
-            if budget > 0:
+            if budget > 0 and TOOLS:
                 kwargs["tools"] = TOOLS            # когда лимит исчерпан, инструменты не предлагаем
             stream = self.client.chat.completions.create(**kwargs)
             content, reasoning, calls = "", "", {}
@@ -151,8 +142,8 @@ class Brain:
                             if tc.id:
                                 slot["id"] = tc.id
                             if tc.function:
-                                if tc.function.name:
-                                    slot["name"] += tc.function.name
+                                if tc.function.name and tc.function.name != slot["name"]:
+                                    slot["name"] += tc.function.name   # имя приходит кусками (часть провайдеров повторяет его целиком)
                                 if tc.function.arguments:
                                     slot["args"] += tc.function.arguments
             finally:
@@ -164,8 +155,6 @@ class Brain:
             if not calls:
                 return spoken.strip()
 
-            if speaker and not content.strip():
-                speaker.say("Секунду.")
             ordered = [c for _, c in sorted(calls.items())]
             am = {"role": "assistant", "content": content or None, "tool_calls": [
                 {"id": c["id"], "type": "function",
@@ -183,6 +172,9 @@ class Brain:
                 jobs.append((c, args))
             allowed = jobs[:max(budget, 0)]
             budget -= len(allowed)
+            # «Секунду.» говорим только перед медленными инструментами (поиск, сеть), перед быстрыми это лишнее
+            if speaker and not content.strip() and any(c["name"] not in FAST_TOOLS for c, _ in allowed):
+                speaker.say("Секунду.")
             if on_status and allowed:
                 on_status(" ".join(STATUS.get(c["name"], c["name"]) for c, _ in allowed))
             with ThreadPoolExecutor(max_workers=max(1, len(allowed))) as ex:   # параллельно

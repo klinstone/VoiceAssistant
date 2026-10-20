@@ -8,6 +8,10 @@ from . import config as cfg
 from .log import log
 from .text_utils import clean_for_tts
 
+# sounddevice играет через один общий поток: без блокировки сигнал (таймер, «пиликанье»)
+# обрывал бы озвучку, а sd.wait() ждал бы чужой звук.
+_AUDIO_LOCK = threading.Lock()
+
 
 # ------------------------------ микрофон ------------------------------
 def pick_device():
@@ -35,6 +39,13 @@ class Mic:
     def start(self):
         self.stream.start()
 
+    def close(self):
+        try:
+            self.stream.stop()
+            self.stream.close()
+        except Exception:
+            pass
+
     def get(self, timeout=0.5):
         return self.q.get(timeout=timeout)
 
@@ -59,9 +70,10 @@ def _play_notes(notes, vol=0.22, block=True):
         parts.append((np.sin(2 * np.pi * f * t) + 0.3 * np.sin(4 * np.pi * f * t)) * env)
     wave = np.concatenate(parts)
     wave = (wave / max(1e-6, np.abs(wave).max()) * vol).astype("float32")
-    sd.play(wave, sr)
-    if block:
-        sd.wait()
+    with _AUDIO_LOCK:
+        sd.play(wave, sr)
+        if block:
+            sd.wait()
 
 
 def chime_start():
@@ -77,6 +89,11 @@ def chime_stop(block=True):
 def chime_reset():
     """Контекст сброшен: два одинаковых коротких сигнала."""
     _play_notes([(740, 70), (0, 50), (740, 90)])
+
+
+def chime_alarm():
+    """Сработал таймер: три коротких сигнала и длинный."""
+    _play_notes([(880, 120), (0, 70), (880, 120), (0, 70), (880, 120), (0, 160), (1175, 330)], vol=0.35)
 
 
 # ------------------------------ озвучка ------------------------------
@@ -98,23 +115,44 @@ def load_tts():
 
 
 class Speaker:
-    """Два потока: синтез предложений и их воспроизведение (чтобы не было пауз между фразами)."""
+    """Два потока: синтез предложений и их воспроизведение (чтобы не было пауз между фразами).
+    stop() мгновенно обрывает озвучку и очищает очередь (счётчик gen отсекает недосинтезированное)."""
 
     def __init__(self, tts_model):
         self.model = tts_model
         self.text_q = queue.Queue()
         self.audio_q = queue.Queue(maxsize=4)
+        self.gen = 0
         threading.Thread(target=self._synth_loop, daemon=True).start()
         threading.Thread(target=self._play_loop, daemon=True).start()
 
     def say(self, text):
         text = clean_for_tts(text)
         if text:
-            self.text_q.put(text)
+            self.text_q.put((self.gen, text))
+
+    def busy(self):
+        """Что-то сейчас озвучивается или ждёт очереди."""
+        return self.text_q.unfinished_tasks > 0 or self.audio_q.unfinished_tasks > 0
 
     def wait(self):
         self.text_q.join()
         self.audio_q.join()
+
+    def stop(self):
+        self.gen += 1
+        for q in (self.text_q, self.audio_q):
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+                q.task_done()
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception:
+            pass
 
     def synth(self, text):
         import torch
@@ -133,9 +171,12 @@ class Speaker:
 
     def _synth_loop(self):
         while True:
-            text = self.text_q.get()
+            gen, text = self.text_q.get()
             try:
-                self.audio_q.put(self._synth_safe(text))
+                if gen == self.gen:
+                    audio = self._synth_safe(text)
+                    if gen == self.gen:
+                        self.audio_q.put((gen, audio))
             except Exception as e:
                 log(f"Не удалось озвучить «{text[:60]}»: {type(e).__name__}")
             finally:
@@ -144,10 +185,13 @@ class Speaker:
     def _play_loop(self):
         import sounddevice as sd
         while True:
-            audio = self.audio_q.get()
+            gen, audio = self.audio_q.get()
             try:
-                sd.play(audio, cfg.TTS_SAMPLE_RATE)
-                sd.wait()
+                if gen == self.gen:
+                    with _AUDIO_LOCK:
+                        if gen == self.gen:
+                            sd.play(audio, cfg.TTS_SAMPLE_RATE)
+                            sd.wait()
             except Exception:
                 traceback.print_exc()
             finally:

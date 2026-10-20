@@ -62,6 +62,31 @@ class Info:
     count: int
 
 
+def _summary(path):
+    """Заголовок и число реплик. JSON разбирается только до первой реплики пользователя,
+    остальное лишь считается построчно: список диалогов открывается быстро даже при сотнях файлов."""
+    title, count = None, 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                count += 1
+                if title is None:
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        count -= 1
+                        continue
+                    if rec.get("role") == "user" and rec.get("content"):
+                        title = " ".join(rec["content"].split())[:45]
+    except OSError:
+        return None
+    if not count:
+        return None
+    return title or "(без заголовка)", count
+
+
 def list_sessions():
     """Список диалогов, новые сверху."""
     d = _dir()
@@ -69,16 +94,14 @@ def list_sessions():
         return []
     infos = []
     for p in sorted(d.glob("*.jsonl"), reverse=True):
-        msgs = load_messages(p)
-        if not msgs:
+        s = _summary(p)
+        if s is None:
             continue
-        first = next((m["content"] for m in msgs if m["role"] == "user"), msgs[0]["content"])
-        title = " ".join(first.split())[:45]
         try:
             when = datetime.strptime(p.stem[:19], "%Y-%m-%d_%H-%M-%S")
         except ValueError:
             when = datetime.fromtimestamp(p.stat().st_mtime)
-        infos.append(Info(p, when, title, len(msgs)))
+        infos.append(Info(p, when, s[0], s[1]))
     return infos
 
 
