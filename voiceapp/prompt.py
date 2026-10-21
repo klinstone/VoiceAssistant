@@ -3,7 +3,7 @@
 import datetime
 
 from . import config as cfg
-from . import notes
+from . import notes, settings
 
 WEEKDAYS = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
 
@@ -42,7 +42,9 @@ def _tail():
     s = (f"\n\nСейчас {now:%d.%m.%Y}, {WEEKDAYS[now.weekday()]}, {now:%H:%M}. "
          f"Город по умолчанию для погоды: {cfg.DEFAULT_CITY}.")
     facts = notes.facts_prompt()
-    return s + ("\n\n" + facts if facts else "")
+    extra = str(settings.get("EXTRA_PROMPT") or "").strip()
+    return (s + ("\n\n" + facts if facts else "")
+            + ("\n\nДополнительные инструкции пользователя:\n" + extra if extra else ""))
 
 
 def build_system_prompt():

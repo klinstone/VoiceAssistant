@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Инструменты, которые может вызывать модель.
 Чтобы добавить новый: напишите функцию, оформите её декоратором @tool(...) ниже и упомяните в prompt.py.
-Ненужные инструменты отключаются в config.py: DISABLED_TOOLS = ["look_at_screen", ...]
+Ненужные инструменты отключаются в окне «Настройки» (или DISABLED_TOOLS = ["look_at_screen", ...] в config.py)
 (каждая схема отправляется модели в каждом запросе, лишние инструменты слегка замедляют ответ)."""
 import time
 
@@ -169,8 +169,18 @@ def _status(a):
 
 
 # ------------------------------ публичный интерфейс ------------------------------
-_DISABLED = set(settings.get("DISABLED_TOOLS") or [])
-TOOLS = [v["schema"] for k, v in _REG.items() if k not in _DISABLED]
+def active_tools():
+    """Схемы инструментов, доступных модели (учитывает DISABLED_TOOLS, меняется без перезапуска)."""
+    off = set(settings.get("DISABLED_TOOLS") or [])
+    return [v["schema"] for k, v in _REG.items() if k not in off]
+
+
+def tool_catalog():
+    """[(имя, описание)] всех инструментов (для окна настроек)."""
+    return [(k, v["schema"]["function"]["description"]) for k, v in _REG.items()]
+
+
+TOOLS = active_tools()      # для --tool list
 STATUS = {k: v["status"] for k, v in _REG.items()}
 FAST_TOOLS = {k for k, v in _REG.items() if v["fast"]}
 
@@ -178,7 +188,7 @@ FAST_TOOLS = {k for k, v in _REG.items() if v["fast"]}
 def run_tool(name, args):
     t0 = time.time()
     ent = _REG.get(name)
-    if ent is None or name in _DISABLED:
+    if ent is None or name in (settings.get("DISABLED_TOOLS") or []):
         res = "Неизвестный инструмент."
     else:
         try:

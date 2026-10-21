@@ -160,6 +160,17 @@ class Speaker:
             audio = self.model.apply_tts(text=text, speaker=cfg.SPEAKER, sample_rate=cfg.TTS_SAMPLE_RATE)
         return audio.numpy().astype("float32")
 
+    def preview(self, text, speaker):
+        """Проверка голоса из окна настроек: синтез выбранным диктором и воспроизведение (блокирует вызвавший поток)."""
+        import sounddevice as sd
+        import torch
+        text = clean_for_tts(text)
+        with torch.inference_mode():
+            audio = self.model.apply_tts(text=text, speaker=speaker, sample_rate=cfg.TTS_SAMPLE_RATE)
+        with _AUDIO_LOCK:
+            sd.play(audio.numpy().astype("float32"), cfg.TTS_SAMPLE_RATE)
+            sd.wait()
+
     def _synth_safe(self, text):
         try:
             return self.synth(text)

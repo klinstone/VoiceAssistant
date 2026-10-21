@@ -8,6 +8,7 @@ import threading
 import time
 import traceback
 
+from . import bus
 from . import config as cfg
 from . import settings
 from .audio import Mic, Speaker, chime_alarm, chime_reset, chime_start, chime_stop, load_tts
@@ -22,10 +23,9 @@ def is_new_session(text):
 
 
 class Assistant:
-    def __init__(self, stop, tray=None):
+    def __init__(self, stop, brain=None):
         self.stop = stop
-        self.tray = tray
-        self.brain = None
+        self.brain = brain                      # общий мозг: голос и окно чата работают с одним диалогом
         self.asr = None
         self.speaker = None
         self.ignore_until = 0.0
@@ -35,19 +35,27 @@ class Assistant:
             r"^\W*" + r"\W+".join(map(re.escape, cfg.WAKE_PHRASE.split())) + r"\W*", re.I)
 
     def state(self, st, text):
-        if self.tray:
-            self.tray.set(st, text)
+        bus.emit(bus.STATE, state=st, text=text)    # иконка в трее и индикатор в окне подписаны на это событие
 
     def reset_session(self):
         if self.brain:
-            self.brain.reset()
+            self.brain.new_session()
         log("Контекст диалога сброшен.")
 
-    def silence(self):
-        """Остановить озвучку и повторы сигнала таймера (пункт «Остановить звук» в трее, кодовое слово)."""
+    def silence(self, cancel=False):
+        """Остановить озвучку и повторы сигнала таймера (пункт «Остановить звук» в трее, кодовое слово).
+        cancel=True: заодно прервать ответ модели, который ещё генерируется."""
         self.alarm_stop.set()
+        if cancel and self.brain:
+            self.brain.cancel()
         if self.speaker is not None:
             self.speaker.stop()
+
+    def preview_voice(self, text, speaker):
+        """Проверка диктора из окна настроек."""
+        if self.speaker is None:
+            raise RuntimeError("Голос ещё загружается.")
+        self.speaker.preview(text, speaker)
 
     # ---------------------------- таймеры ----------------------------
     def on_alarm(self, item, late=False):
@@ -56,8 +64,7 @@ class Assistant:
         head = "Пропущенное напоминание." if late else ("Таймер сработал." if item.get("kind") == "timer" else "Напоминание.")
         text = head + (f" {label}." if label else "")
         log("Сработало:", text)
-        if self.tray:
-            self.tray.notify(label or head)
+        bus.emit(bus.NOTIFY, title="Ассистент", text=label or head)
         self.alarm_stop.clear()
         repeats = max(1, int(settings.get("ALARM_REPEATS")))
         for i in range(repeats):
@@ -96,7 +103,7 @@ class Assistant:
             self.speaker.synth("Привет.")     # «прогрев» без воспроизведения
         except Exception:
             pass
-        if llm:
+        if llm and self.brain is None:
             from .llm import Brain
             self.brain = Brain()
 
@@ -116,6 +123,7 @@ class Assistant:
         max_len = cfg.MAX_RECORD - 0.1 * len(frames)     # блок = 0.1 с
         t0 = last_act = time.time()
         last_idx = len(frames)
+        live_text = ""
         while not self.stop.is_set():
             try:
                 data = mic.get(1.0)
@@ -143,6 +151,10 @@ class Assistant:
                         partial = p
                         if p:
                             started, last_act, last_idx = True, now, len(frames)
+                live = self.wake_re.sub("", " ".join([*segments, partial])).strip()
+                if live != live_text:               # окно чата показывает это в поле ввода
+                    live_text = live
+                    bus.emit(bus.VOICE_PARTIAL, text=live)
             if not started:
                 if now - t0 > first_timeout:
                     return None, ""
@@ -183,6 +195,7 @@ class Assistant:
                 mic.drain()
             pcm, vt = self.record(mic, cfg.NO_SPEECH_TIMEOUT if first else cfg.FOLLOWUP_WINDOW,
                                   preroll=preroll)
+            bus.emit(bus.VOICE_PARTIAL, text="")
             preroll = None
             if pcm is None:
                 chime_stop(block=True)              # «диалог окончен, не слушаю»
@@ -207,7 +220,7 @@ class Assistant:
                 chime_reset()
                 return
             try:
-                answer = self.brain.ask(text, self.speaker)  # ответ печатается и озвучивается потоком
+                answer = self.brain.ask(text, self.speaker, src="voice")  # ответ печатается, озвучивается и виден в окне потоком
             except Exception as e:
                 log(f"Ошибка LLM: {e}")
                 self.speaker.say("Не получилось связаться с моделью.")

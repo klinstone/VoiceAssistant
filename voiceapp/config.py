@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Все настройки ассистента. Меняйте значения здесь."""
+"""Настройки ассистента по умолчанию. Удобнее менять их в окне «Настройки» (трей → Настройки)."""
 import os
 from pathlib import Path
 
@@ -49,3 +49,37 @@ ASR_MODELS = [                         # пробуем по очереди; п�
 MIC_DEVICE = None        # None = по умолчанию; число или часть названия, напр. "K678"
 SAMPLE_RATE = 16000
 USE_TRAY = True
+
+
+# ---------------- пользовательские настройки ----------------
+# Всё, что выше, — значения по умолчанию. То, что вы меняете в окне «Настройки»,
+# сохраняется в data/settings.json и накладывается поверх них при каждом запуске.
+DEFAULTS = {k: v for k, v in dict(globals()).items() if k.isupper()}
+USER_SETTINGS_FILE = BASE / "data" / "settings.json"
+_PROTECTED = {"BASE", "CACHE", "VOSK_DIR", "DEFAULTS", "USER_SETTINGS_FILE"}
+
+
+def _same_kind(default, value):
+    if default is None or value is None:
+        return True
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, type(default))
+
+
+def _load_user_settings():
+    import json
+    try:
+        with open(USER_SETTINGS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k.isupper() and k not in _PROTECTED and _same_kind(DEFAULTS.get(k), v):
+                globals()[k] = v
+
+
+_load_user_settings()

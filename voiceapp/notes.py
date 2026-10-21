@@ -169,6 +169,35 @@ def remember_tool(action=None, text=""):
     return "Неизвестное действие. Допустимо: add, forget, list."
 
 
+# ------------------------------ для окна настроек ------------------------------
+def snapshot():
+    """Всё содержимое: {"notes": [(список, текст)], "facts": [текст]}."""
+    with _lock:
+        data = _load()
+    return {"notes": [(n["list"], n["text"]) for n in data["notes"]], "facts": [f["text"] for f in data["facts"]]}
+
+
+def replace_all(note_rows, fact_rows):
+    """Заменить заметки и факты тем, что отредактировано в окне. Записи, которые не менялись, сохраняют id и дату."""
+    with _lock:
+        data = _load()
+        old_n = {(n["list"], norm_text(n["text"])): n for n in data["notes"]}
+        old_f = {norm_text(f["text"]): f for f in data["facts"]}
+        notes_new, facts_new = [], []
+        for ln, text in note_rows:
+            text, ln = " ".join(str(text or "").split()), _list_name(ln)
+            if text:
+                notes_new.append(old_n.get((ln, norm_text(text))) or
+                                 {"id": _new_id(data), "t": time.strftime("%Y-%m-%dT%H:%M"), "list": ln, "text": text})
+        for text in fact_rows:
+            text = " ".join(str(text or "").split())
+            if text:
+                facts_new.append(old_f.get(norm_text(text)) or
+                                 {"id": _new_id(data), "t": time.strftime("%Y-%m-%d"), "text": text})
+        data["notes"], data["facts"] = notes_new, facts_new
+        _save(data)
+
+
 def facts_prompt():
     """Блок для системного промпта: что ассистент помнит о пользователе."""
     with _lock:

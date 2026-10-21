@@ -8,7 +8,7 @@ from . import config as cfg
 def make_client(timeout=40):
     from dotenv import load_dotenv
     from openai import OpenAI
-    load_dotenv(cfg.BASE / ".env")
+    load_dotenv(cfg.BASE / ".env", override=True)
     key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not key or "ваш_ключ" in key:
         raise RuntimeError("В файле .env не найден настоящий OPENROUTER_API_KEY.")
