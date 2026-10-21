@@ -1,7 +1,0 @@
-{
- "DISABLED_TOOLS": [
-  "read_webpage",
-  "get_exchange_rate",
-  "world_time"
- ]
-}
