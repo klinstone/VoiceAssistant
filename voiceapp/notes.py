@@ -26,9 +26,23 @@ def _load():
             data = json.load(f)
     except (OSError, ValueError):
         data = {}
-    data.setdefault("notes", [])
-    data.setdefault("facts", [])
-    data.setdefault("next_id", 1)
+    if not isinstance(data, dict):                  # файл правили руками или он повреждён: не падаем, а работаем с пустым
+        data = {}
+    for key in ("notes", "facts"):
+        raw = data.get(key)
+        data[key] = [i for i in (raw if isinstance(raw, list) else []) if isinstance(i, dict) and isinstance(i.get("text"), str)]
+    try:
+        next_id = int(data.get("next_id", 1))
+    except (TypeError, ValueError):
+        next_id = 1
+    items = [*data["notes"], *data["facts"]]
+    data["next_id"] = max(next_id, max((i["id"] for i in items if isinstance(i.get("id"), int)), default=0) + 1)
+    for i in items:
+        if not isinstance(i.get("id"), int):
+            i["id"] = _new_id(data)
+    for n in data["notes"]:
+        if not isinstance(n.get("list"), str):
+            n["list"] = DEFAULT_LIST
     return data
 
 
@@ -51,7 +65,7 @@ def _list_name(name):
 def _match(query, text):
     """Нестрогое сравнение: подстрока или совпадение по основам слов («молоко» ~ «молока»)."""
     q, t = norm_text(query), norm_text(text)
-    if not q:
+    if not q or not t:                              # запись из одних знаков препинания не должна подходить под любой запрос
         return False
     if q in t or t in q:
         return True

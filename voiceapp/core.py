@@ -26,6 +26,7 @@ class Assistant:
     def __init__(self, stop, brain=None):
         self.stop = stop
         self.brain = brain                      # общий мозг: голос и окно чата работают с одним диалогом
+        self.vosk = None
         self.asr = None
         self.speaker = None
         self.ignore_until = 0.0
@@ -85,24 +86,27 @@ class Assistant:
                 break
 
     # ---------------------------- загрузка ----------------------------
-    def load(self, llm=True):
+    def load(self, llm=True, stt=True, tts=True):
+        """stt: Vosk и распознавание речи, tts: озвучка. Проверкам --say и --listen нужна только часть моделей."""
         self.state("idle", "загрузка")
-        if not HAS_NUM2WORDS:
+        if tts and not HAS_NUM2WORDS:
             log("Совет: выполните `pip install num2words`, чтобы цифры озвучивались словами.")
-        from vosk import Model, SetLogLevel
-        SetLogLevel(-1)
-        if not cfg.VOSK_DIR.exists():
-            raise RuntimeError(f"Не найдена папка {cfg.VOSK_DIR}")
-        log("Загружаю Vosk...")
-        self.vosk = Model(str(cfg.VOSK_DIR))
-        log("Загружаю распознавание речи (первый запуск скачивает модель)...")
-        self.asr = load_asr()
-        log("Загружаю голос (первый запуск скачивает модель)...")
-        self.speaker = Speaker(load_tts())
-        try:
-            self.speaker.synth("Привет.")     # «прогрев» без воспроизведения
-        except Exception:
-            pass
+        if stt:
+            from vosk import Model, SetLogLevel
+            SetLogLevel(-1)
+            if not cfg.VOSK_DIR.exists():
+                raise RuntimeError(f"Не найдена папка {cfg.VOSK_DIR}")
+            log("Загружаю Vosk...")
+            self.vosk = Model(str(cfg.VOSK_DIR))
+            log("Загружаю распознавание речи (первый запуск скачивает модель)...")
+            self.asr = load_asr()
+        if tts:
+            log("Загружаю голос (первый запуск скачивает модель)...")
+            self.speaker = Speaker(load_tts())
+            try:
+                self.speaker.synth("Привет.")     # «прогрев» без воспроизведения
+            except Exception:
+                pass
         if llm and self.brain is None:
             from .llm import Brain
             self.brain = Brain()
@@ -219,14 +223,20 @@ class Assistant:
                 time.sleep(0.3)
                 chime_reset()
                 return
+            talking = []
+
+            def first_words(_delta):                # ответ уже озвучивается по мере генерации: показываем «говорю», а не «думаю»
+                if not talking:
+                    talking.append(True)
+                    self.state("speaking", "говорю")
             try:
-                answer = self.brain.ask(text, self.speaker, src="voice")  # ответ печатается, озвучивается и виден в окне потоком
+                answer = self.brain.ask(text, self.speaker, on_token=first_words, src="voice")  # печатается, озвучивается и виден в окне потоком
             except Exception as e:
                 log(f"Ошибка LLM: {e}")
                 self.speaker.say("Не получилось связаться с моделью.")
                 self.speaker.wait()
                 return
-            if not answer:                          # раньше в этом случае ассистент молча замолкал
+            if not answer and not self.brain.cancelled:     # пустой ответ без отмены: молчать нельзя; после «стоп» оправдываться не нужно
                 self.speaker.say("Не получилось сформулировать ответ.")
             self.state("speaking", "говорю")
             self.speaker.wait()
@@ -309,7 +319,8 @@ class Assistant:
         chime_start()
         mic.drain()
         self.state("ready", f"жду «{cfg.WAKE_PHRASE}»")
-        log(f"Готово. Скажите: «{cfg.WAKE_PHRASE}» (или «{cfg.NEW_SESSION_PHRASES[0]}» для сброса контекста)")
+        reset_hint = f" (или «{cfg.NEW_SESSION_PHRASES[0]}» для сброса контекста)" if cfg.NEW_SESSION_PHRASES else ""
+        log(f"Готово. Скажите: «{cfg.WAKE_PHRASE}»{reset_hint}")
         last_data = time.time()
         while not self.stop.is_set():
             try:

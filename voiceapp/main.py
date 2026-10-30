@@ -90,13 +90,13 @@ def main():
     stop = threading.Event()
     if args.say:
         a = Assistant(stop)
-        a.load(llm=False)
+        a.load(llm=False, stt=False)            # для озвучки нужен только голос
         a.speaker.say(args.say)
         a.speaker.wait()
         return
     if args.listen:
         a = Assistant(stop)
-        a.load(llm=False)
+        a.load(llm=False, tts=False)            # для проверки микрофона голос не нужен
         a.listen_once()
         return
 

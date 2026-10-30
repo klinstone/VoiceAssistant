@@ -59,21 +59,26 @@ class Mic:
 
 # ------------------------------ сигналы ------------------------------
 def _play_notes(notes, vol=0.22, block=True):
-    """Короткий мягкий сигнал из нот [(частота Гц, длительность мс), ...]; частота 0 = пауза."""
-    import numpy as np
-    import sounddevice as sd
-    sr = 48000
-    parts = [np.zeros(int(sr * 0.03))]            # тишина в начале, чтобы звук не обрезался
-    for f, ms in notes:
-        t = np.arange(int(sr * ms / 1000)) / sr
-        env = np.minimum(1.0, t / 0.008) * np.exp(-t * 16)
-        parts.append((np.sin(2 * np.pi * f * t) + 0.3 * np.sin(4 * np.pi * f * t)) * env)
-    wave = np.concatenate(parts)
-    wave = (wave / max(1e-6, np.abs(wave).max()) * vol).astype("float32")
-    with _AUDIO_LOCK:
-        sd.play(wave, sr)
-        if block:
-            sd.wait()
+    """Короткий мягкий сигнал из нот [(частота Гц, длительность мс), ...]; частота 0 = пауза.
+    Сигнал второстепенен: если звук воспроизвести нельзя (устройство вывода пропало), пишем в лог и идём дальше,
+    иначе одно такое исключение останавливало бы всю голосовую часть."""
+    try:
+        import numpy as np
+        import sounddevice as sd
+        sr = 48000
+        parts = [np.zeros(int(sr * 0.03))]            # тишина в начале, чтобы звук не обрезался
+        for f, ms in notes:
+            t = np.arange(int(sr * ms / 1000)) / sr
+            env = np.minimum(1.0, t / 0.008) * np.exp(-t * 16)
+            parts.append((np.sin(2 * np.pi * f * t) + 0.3 * np.sin(4 * np.pi * f * t)) * env)
+        wave = np.concatenate(parts)
+        wave = (wave / max(1e-6, np.abs(wave).max()) * vol).astype("float32")
+        with _AUDIO_LOCK:
+            sd.play(wave, sr)
+            if block:
+                sd.wait()
+    except Exception as e:
+        log(f"Не удалось воспроизвести сигнал: {type(e).__name__}: {str(e)[:100]}")
 
 
 def chime_start():
@@ -154,10 +159,10 @@ class Speaker:
         except Exception:
             pass
 
-    def synth(self, text):
+    def synth(self, text, rate=None):
         import torch
         with torch.inference_mode():
-            audio = self.model.apply_tts(text=text, speaker=cfg.SPEAKER, sample_rate=cfg.TTS_SAMPLE_RATE)
+            audio = self.model.apply_tts(text=text, speaker=cfg.SPEAKER, sample_rate=rate or cfg.TTS_SAMPLE_RATE)
         return audio.numpy().astype("float32")
 
     def preview(self, text, speaker):
@@ -171,13 +176,13 @@ class Speaker:
             sd.play(audio.numpy().astype("float32"), cfg.TTS_SAMPLE_RATE)
             sd.wait()
 
-    def _synth_safe(self, text):
+    def _synth_safe(self, text, rate):
         try:
-            return self.synth(text)
+            return self.synth(text, rate)
         except ValueError:
             simple = clean_for_tts(text, strict=True)   # второй шанс: только русские буквы и знаки
             if simple and simple != text:
-                return self.synth(simple)
+                return self.synth(simple, rate)
             raise
 
     def _synth_loop(self):
@@ -185,9 +190,10 @@ class Speaker:
             gen, text = self.text_q.get()
             try:
                 if gen == self.gen:
-                    audio = self._synth_safe(text)
+                    rate = cfg.TTS_SAMPLE_RATE         # частота запоминается вместе с куском: настройку могут сменить на лету
+                    audio = self._synth_safe(text, rate)
                     if gen == self.gen:
-                        self.audio_q.put((gen, audio))
+                        self.audio_q.put((gen, audio, rate))
             except Exception as e:
                 log(f"Не удалось озвучить «{text[:60]}»: {type(e).__name__}")
             finally:
@@ -196,12 +202,12 @@ class Speaker:
     def _play_loop(self):
         import sounddevice as sd
         while True:
-            gen, audio = self.audio_q.get()
+            gen, audio, rate = self.audio_q.get()
             try:
                 if gen == self.gen:
                     with _AUDIO_LOCK:
                         if gen == self.gen:
-                            sd.play(audio, cfg.TTS_SAMPLE_RATE)
+                            sd.play(audio, rate)
                             sd.wait()
             except Exception:
                 traceback.print_exc()

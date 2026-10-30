@@ -132,13 +132,18 @@ def pc_control(action, value=None):
             if value in (None, ""):
                 return "Не указан уровень громкости (value от 0 до 100)."
             exact = _set_volume(float(value))
-            return f"Громкость {int(float(value))} процентов" + ("." if exact else " (приблизительно; для точности: pip install pycaw).")
+            level = max(0, min(100, int(float(value))))
+            return f"Громкость {level} процентов" + ("." if exact else " (приблизительно; для точности: pip install pycaw).")
         if action == "lock":
             __import__("ctypes").windll.user32.LockWorkStation()
             return "Компьютер заблокирован."
         if action == "sleep":
-            _delayed(lambda: subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
-                                              creationflags=_NO_WINDOW))
+            def suspend():
+                try:        # напрямую через API: rundll32 при включённой гибернации усыпляет в гибернацию, а не в сон
+                    __import__("ctypes").windll.powrprof.SetSuspendState(False, False, False)
+                except Exception:
+                    subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], creationflags=_NO_WINDOW)
+            _delayed(suspend)
             return "Перевожу компьютер в спящий режим через три секунды."
         if action == "show_desktop":
             u = __import__("ctypes").windll.user32
@@ -246,7 +251,7 @@ def open_target(target, query=None):
         webbrowser.open("https://" + t)
         return f"Открываю сайт {t}."
     known = ", ".join(sorted({*sites, *apps, *folders}))
-    return f"Не знаю такой программы или сайта «{t}». Умею открывать: {known}. Свои добавляются в APPS и SITES в config.py."
+    return f"Не знаю такой программы или сайта «{t}». Умею открывать: {known}. Свои программы и сайты добавляются в Настройки, раздел «Инструменты»."
 
 
 # ------------------------------ состояние системы ------------------------------
@@ -349,5 +354,5 @@ def look_at_screen(question):
     except Exception as e:
         log(f"Модель зрения {model}: {e}")
         return (f"Не удалось получить ответ от модели зрения ({model}): {str(e)[:200]}. "
-                "Проверьте VISION_MODEL в config.py (модель должна принимать изображения).")
+                "Проверьте «Модель для экрана» в Настройках (она должна принимать изображения).")
     return f"Ответ по снимку экрана: {answer}" if answer else "Модель зрения вернула пустой ответ."

@@ -35,12 +35,14 @@ class NotesTab(QWidget):
         info.setObjectName("muted")
         info.setWordWrap(True)
         v.addWidget(info)
+        self.dirty = False                      # есть несохранённые правки (страницу не перезагружаем поверх них)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Список", "Запись"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 160)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.itemChanged.connect(lambda _: setattr(self, "dirty", True))
         v.addWidget(self.table, 1)
         row = QHBoxLayout()
         add, rm, ref, save = _btn("Добавить"), _btn("Удалить"), _btn("Обновить"), _btn("Сохранить", True)
@@ -65,12 +67,16 @@ class NotesTab(QWidget):
         r = self.table.currentRow()
         if r >= 0:
             self.table.removeRow(r)
+            self.dirty = True
 
     def load(self):
+        self.table.blockSignals(True)           # заполнение из файла не считается правкой
         self.table.setRowCount(0)
         for ln, text in notes.snapshot()["notes"]:
             self._add(ln, text)
         self.table.clearSelection()
+        self.table.blockSignals(False)
+        self.dirty = False
 
     def save(self):
         rows = [((self.table.item(r, 0) or QTableWidgetItem()).text(), (self.table.item(r, 1) or QTableWidgetItem()).text())
@@ -93,14 +99,16 @@ class FactsTab(QWidget):
         info.setObjectName("muted")
         info.setWordWrap(True)
         v.addWidget(info)
+        self.dirty = False
         self.list = QListWidget()
         self.list.setObjectName("inner")
         self.list.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.list.itemChanged.connect(lambda _: setattr(self, "dirty", True))
         v.addWidget(self.list, 1)
         row = QHBoxLayout()
         add, rm, ref, save = _btn("Добавить"), _btn("Удалить"), _btn("Обновить"), _btn("Сохранить", True)
         add.clicked.connect(self._add)
-        rm.clicked.connect(lambda: self.list.currentRow() >= 0 and self.list.takeItem(self.list.currentRow()))
+        rm.clicked.connect(self._remove)
         ref.clicked.connect(self.load)
         save.clicked.connect(self.save)
         for b in (add, rm, ref):
@@ -119,11 +127,21 @@ class FactsTab(QWidget):
         self.list.addItem(it)
         self.list.setCurrentItem(it)
         self.list.editItem(it)
+        self.dirty = True
+
+    def _remove(self):
+        r = self.list.currentRow()
+        if r >= 0:
+            self.list.takeItem(r)
+            self.dirty = True
 
     def load(self):
+        self.list.blockSignals(True)
         self.list.clear()
         for t in notes.snapshot()["facts"]:
             self.list.addItem(self._item(t))
+        self.list.blockSignals(False)
+        self.dirty = False
 
     def save(self):
         facts = [self.list.item(i).text() for i in range(self.list.count())]
@@ -298,9 +316,22 @@ class DataPage(QWidget):
     def say(self, text):
         self.msg.setText(text)
 
-    def load(self):
-        self.notes.load()
-        self.facts.load()
+    def is_dirty(self):
+        return self.notes.dirty or self.facts.dirty
+
+    def save_all(self):
+        if self.notes.dirty:
+            self.notes.save()
+        if self.facts.dirty:
+            self.facts.save()
+
+    def load(self, force=False):
+        """Перечитать файл. Вкладки с несохранёнными правками не трогаем (иначе правки пропадали бы
+        при переходе на другую страницу настроек и возврате), force=True перечитывает всё."""
+        if force or not self.notes.dirty:
+            self.notes.load()
+        if force or not self.facts.dirty:
+            self.facts.load()
 
     def showEvent(self, e):
         super().showEvent(e)

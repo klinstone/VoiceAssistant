@@ -46,11 +46,21 @@ class Brain:
         self._cancel = threading.Event()
         self._turn = 0
         self.history = []
-        self.no_reasoning = False
+        self._no_reasoning_for = None       # модель, которая отвергла параметр reasoning (для другой модели его пробуем снова)
         self.last_activity = time.time()
         self.busy = False                   # сейчас обрабатывается запрос
         self.inflight = None                # {"turn", "src", "user", "answer"} пока идёт запрос (окно могли открыть посреди ответа)
         self.session = sessions.new_session()   # активный диалог; пока в нём нет реплик, это «черновик» без файла
+
+    @property
+    def no_reasoning(self):
+        """Для текущей модели режим размышлений отключён: она ответила на него ошибкой запроса."""
+        return self._no_reasoning_for == cfg.LLM_MODEL
+
+    @property
+    def cancelled(self):
+        """Последний запрос прерван пользователем (читать сразу после возврата из ask)."""
+        return self._cancel.is_set()
 
     # ------------------------- клиент -------------------------
     @property
@@ -74,20 +84,15 @@ class Brain:
         """Активный диалог ещё пуст (файл появится вместе с первой репликой)."""
         return not self.session.path.exists()
 
-    @staticmethod
-    def _limit(src):
-        return cfg.HISTORY_MESSAGES if src == "voice" else settings.get("CHAT_HISTORY_MESSAGES")
-
-    def _context(self, src):
-        """Последние реплики, которые уйдут модели (для голоса и текста лимиты свои)."""
-        msgs = self.history[-max(2, self._limit(src)):]
+    def _context(self):
+        """Последние реплики, которые уйдут модели (HISTORY_MESSAGES: одно число для голоса и для чата)."""
+        msgs = self.history[-max(2, cfg.HISTORY_MESSAGES):]
         while msgs and msgs[0]["role"] != "user":
             msgs = msgs[1:]
         return msgs
 
     def _trim(self):
-        keep = max(cfg.HISTORY_MESSAGES, settings.get("CHAT_HISTORY_MESSAGES"), 2)
-        self.history = self.history[-keep:]
+        self.history = self.history[-max(2, cfg.HISTORY_MESSAGES):]
         while self.history and self.history[0]["role"] != "user":
             self.history.pop(0)
 
@@ -176,6 +181,7 @@ class Brain:
                 bus.emit(bus.USER_MESSAGE, turn=turn, text=user_text, src=src)
                 bus.emit(bus.ASSISTANT_START, turn=turn, src=src)
                 answer = ""
+                retried = False
                 for attempt in (1, 2):
                     try:
                         answer = self._run(user_text, speaker, on_token, on_status, src, turn)
@@ -184,15 +190,21 @@ class Brain:
                         log(f"LLM: ошибка запроса: {e}")
                         if attempt == 1 and cfg.REASONING_EFFORT and not self.no_reasoning:
                             log("Повторяю без режима размышлений.")
-                            self.no_reasoning = True
+                            self._no_reasoning_for = cfg.LLM_MODEL
+                            retried = True
                             continue
+                        if retried:                 # без размышлений тоже не вышло: дело было не в них, не запоминаем
+                            self._no_reasoning_for = None
                         raise
                 if answer:
                     self.history += [{"role": "user", "content": user_text},
                                      {"role": "assistant", "content": answer}]
                     self._trim()
-                    self.session.append("user", user_text, src)
-                    self.session.append("assistant", answer, src)
+                    try:                            # ответ уже получен: сбой записи на диск не должен выглядеть отказом модели
+                        self.session.append("user", user_text, src)
+                        self.session.append("assistant", answer, src)
+                    except OSError as e:
+                        log(f"Не удалось сохранить диалог: {e}")
                     bus.emit(bus.SESSIONS_UPDATED)
                 self.last_activity = time.time()
                 bus.emit(bus.ASSISTANT_DONE, turn=turn, text=answer or "")
@@ -206,7 +218,7 @@ class Brain:
 
     def _run(self, user_text, speaker, on_token, on_status, src, turn):
         system = build_system_prompt() if src == "voice" else build_chat_prompt()
-        messages = [{"role": "system", "content": system}, *self._context(src),
+        messages = [{"role": "system", "content": system}, *self._context(),
                     {"role": "user", "content": user_text}]
         spoken, budget = "", cfg.MAX_TOOL_CALLS
         printer = _StreamPrinter()

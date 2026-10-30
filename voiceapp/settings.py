@@ -3,6 +3,7 @@
 Порядок такой: значения из config.py / _DEFAULTS ниже -> поверх них то, что сохранено в data/settings.json.
 Окно «Настройки» пишет сюда через save(): изменения применяются сразу, а при следующем запуске
 config.py сам подхватит data/settings.json. Ключ OpenRouter лежит отдельно, в .env (env_get / env_set)."""
+import copy
 import json
 import os
 
@@ -11,7 +12,6 @@ from . import config as _cfg
 _DEFAULTS = {
     "CONTEXT_TIMEOUT_MIN": 10,                     # через сколько минут тишины голос начинает новый диалог (0 = никогда)
     "SESSIONS_DIR": _cfg.BASE / "sessions",        # куда сохраняются диалоги
-    "CHAT_HISTORY_MESSAGES": 40,                   # сколько последних реплик модель получает при вводе текстом
     "WAKE_SPLIT_WORDS": True,                      # добавлять в грамматику Vosk отдельные слова фразы
     "WAKE_CARRY_ON": True,                         # вопрос можно говорить сразу после кодовой фразы, без паузы
     "WAKE_MIN_CONF": 0.0,                          # мин. уверенность Vosk для кодового слова (0 = выключено)
@@ -30,7 +30,7 @@ _DEFAULTS = {
     "VISION_MODEL": "google/gemini-2.5-flash",     # модель для «посмотри на экран» (None = LLM_MODEL)
     "SCREEN_MAX_SIDE": 1600,                       # скриншот сжимается до такой длинной стороны, px
     "SCREEN_ALL_MONITORS": False,                  # снимать все мониторы сразу (иначе только основной)
-    "ALARM_REPEATS": 3,                            # сколько раз повторять сигнал таймера
+    "ALARM_REPEATS": 1,                            # сколько раз повторять сигнал таймера
     "ALARM_GAP": 12,                               # пауза между повторами, сек
     "APPS": {},                                    # свои программы: {"телеграм": r"C:\...\Telegram.exe"}
     "SITES": {},                                   # свои сайты: {"почта": "https://...", "пикабу": "https://.../search?q={q}"}
@@ -49,10 +49,21 @@ def get(name):
 
 
 def default(name):
-    """Значение по умолчанию (без учёта data/settings.json)."""
+    """Значение по умолчанию (без учёта data/settings.json). Всегда копия: списки и словари нельзя испортить на месте."""
     if name in _cfg.DEFAULTS:
-        return _cfg.DEFAULTS[name]
-    return _DEFAULTS.get(name)
+        return copy.deepcopy(_cfg.DEFAULTS[name])
+    return copy.deepcopy(_DEFAULTS.get(name))
+
+
+def _sanitize():
+    """config.py проверяет по типу только свои ключи. Здесь то же для ключей из _DEFAULTS: значение из settings.json,
+    которое не подходит по типу (файл правили руками), заменяется умолчанием, а не роняет программу позже."""
+    for name, dflt in _DEFAULTS.items():
+        if name in vars(_cfg) and name not in _cfg.DEFAULTS and not _cfg._same_kind(name, getattr(_cfg, name), dflt):
+            setattr(_cfg, name, copy.deepcopy(dflt))
+
+
+_sanitize()
 
 
 # ------------------------------ data/settings.json ------------------------------

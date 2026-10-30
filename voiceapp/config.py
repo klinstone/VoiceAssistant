@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Настройки ассистента по умолчанию. Удобнее менять их в окне «Настройки» (трей → Настройки)."""
+"""Все настройки ассистента. Меняйте значения здесь.
+Окно «Настройки» хранит свои изменения в data/settings.json: при запуске они накладываются поверх значений из этого файла
+(см. блок «служебное» в самом конце)."""
+import copy
+import json
 import os
 from pathlib import Path
 
@@ -27,10 +31,9 @@ MAX_RECORD = 25          # макс. длина одной фразы, сек (�
 
 # ---------------- LLM ----------------
 LLM_MODEL = "deepseek/deepseek-v4.1-flash-1017"
-VISION_MODEL = "deepseek/deepseek-v4.1-flash-1017"
 REASONING_EFFORT = "low"   # "low" | "high" | "max" | None (не передавать)
 MAX_TOOL_CALLS = 3         # макс. обращений к поиску/погоде/курсам за один ответ
-HISTORY_MESSAGES = 20      # сколько последних реплик помнить
+HISTORY_MESSAGES = 30      # сколько последних реплик помнить (одно число и для голоса, и для чата)
 DEFAULT_CITY = "Tomsk" # город для погоды, если не назван
 
 # ---------------- голос и распознавание ----------------
@@ -51,35 +54,55 @@ SAMPLE_RATE = 16000
 USE_TRAY = True
 
 
-# ---------------- пользовательские настройки ----------------
-# Всё, что выше, — значения по умолчанию. То, что вы меняете в окне «Настройки»,
-# сохраняется в data/settings.json и накладывается поверх них при каждом запуске.
-DEFAULTS = {k: v for k, v in dict(globals()).items() if k.isupper()}
+# ======================================================================================================
+# Служебное: пользовательские настройки (data/settings.json). Ниже ничего менять не нужно.
+# ======================================================================================================
+# Значения по умолчанию запоминаем ДО наложения пользовательских: по ним окно «Настройки» умеет сбрасывать значения
+# (settings.default). Пути (BASE, CACHE...) настройками не являются.
+DEFAULTS = {k: copy.deepcopy(v) for k, v in list(globals().items()) if k.isupper() and not isinstance(v, Path)}
 USER_SETTINGS_FILE = BASE / "data" / "settings.json"
-_PROTECTED = {"BASE", "CACHE", "VOSK_DIR", "DEFAULTS", "USER_SETTINGS_FILE"}
+
+_NULLABLE = {"REASONING_EFFORT", "MIC_DEVICE", "VISION_MODEL"}      # для этих настроек None — осмысленное значение
+_PROTECTED = {"DEFAULTS", "USER_SETTINGS_FILE"}
 
 
-def _same_kind(default, value):
-    if default is None or value is None:
-        return True
-    if isinstance(default, bool):
-        return isinstance(value, bool)
+def _same_kind(name, value, default):
+    """Подходит ли значение из settings.json по типу к умолчанию (испорченный файл не должен ронять запуск)."""
+    if value is None:
+        return default is None or name in _NULLABLE
+    if default is None:                                  # например MIC_DEVICE: номер или часть названия
+        return isinstance(value, (int, str)) and not isinstance(value, bool)
+    if isinstance(default, bool) or isinstance(value, bool):
+        return isinstance(default, bool) and isinstance(value, bool)
     if isinstance(default, (int, float)):
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    return isinstance(value, type(default))
+        return isinstance(value, (int, float))
+    if isinstance(default, (list, tuple)):
+        return isinstance(value, list)
+    if isinstance(default, dict):
+        return isinstance(value, dict)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    return True
 
 
 def _load_user_settings():
-    import json
+    """Накладывает data/settings.json на значения выше. Ключи, которых нет в этом файле (CONTEXT_TIMEOUT_MIN и другие,
+    описанные в settings._DEFAULTS), тоже применяются: settings.get() ищет их здесь в первую очередь."""
     try:
         with open(USER_SETTINGS_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if k.isupper() and k not in _PROTECTED and _same_kind(DEFAULTS.get(k), v):
-                globals()[k] = v
+    if not isinstance(data, dict):
+        return
+    for name, value in data.items():
+        if not (isinstance(name, str) and name.isidentifier() and name.isupper()) or name in _PROTECTED:
+            continue
+        if isinstance(globals().get(name), Path):
+            continue
+        if name in DEFAULTS and not _same_kind(name, value, DEFAULTS[name]):
+            continue
+        globals()[name] = value
 
 
 _load_user_settings()

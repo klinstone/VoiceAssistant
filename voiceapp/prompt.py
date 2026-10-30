@@ -34,7 +34,14 @@ TOOLS_HINT = """Инструменты
 
 
 def tools_hint():
-    return TOOLS_HINT.replace("{N}", str(cfg.MAX_TOOL_CALLS))
+    hint = TOOLS_HINT.replace("{N}", str(cfg.MAX_TOOL_CALLS))
+    off = [n for n in (settings.get("DISABLED_TOOLS") or []) if isinstance(n, str)]
+    if cfg.MAX_TOOL_CALLS <= 0:
+        hint += "\n- Сейчас инструменты отключены: ничего не вызывай, а если для ответа нужен инструмент, так и скажи."
+    elif off:                                      # модель не получает схемы этих инструментов, но видит их в списке выше
+        hint += ("\n- Сейчас недоступны инструменты: " + ", ".join(off)
+                 + ". Не пытайся их вызывать, а если они нужны для ответа, так и скажи.")
+    return hint
 
 
 def _tail():

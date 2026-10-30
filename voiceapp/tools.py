@@ -18,11 +18,12 @@ def _schema(name, description, props=None, required=None):
         "parameters": {"type": "object", "properties": props or {}, "required": required or []}}}
 
 
-def tool(name, description, props=None, required=None, status="", fast=False):
-    """fast=True: инструмент мгновенный, перед ним не нужно говорить «Секунду»."""
+def tool(name, description, props=None, required=None, status="", fast=False, limit=None):
+    """fast=True: инструмент мгновенный, перед ним не нужно говорить «Секунду».
+    limit: сколько символов результата отдавать модели (число или функция без аргументов); по умолчанию MAX_RESULT."""
     def deco(fn):
         _REG[name] = {"schema": _schema(name, description, props, required), "fn": fn,
-                      "status": status or name, "fast": fast}
+                      "status": status or name, "fast": fast, "limit": limit}
         return fn
     return deco
 
@@ -47,7 +48,8 @@ def _web_search(a):
 @tool("read_webpage",
       "Прочитать страницу целиком по ссылке (статью из результатов поиска) или получить текст субтитров видео на YouTube, "
       "чтобы пересказать или ответить по содержанию.",
-      {"url": _s("Ссылка, начинающаяся с http:// или https://")}, ["url"], status="Читаю страницу…")
+      {"url": _s("Ссылка, начинающаяся с http:// или https://")}, ["url"], status="Читаю страницу…",
+      limit=lambda: int(settings.get("PAGE_MAX_CHARS")) + 1000)     # настройка «Сколько текста страницы читать» + заголовок
 def _read_webpage(a):
     from . import web
     return web.read_webpage(a.get("url"))
@@ -185,6 +187,16 @@ STATUS = {k: v["status"] for k, v in _REG.items()}
 FAST_TOOLS = {k for k, v in _REG.items() if v["fast"]}
 
 
+def _cap(ent):
+    """Сколько символов результата можно отдать модели: свой лимит инструмента или общий MAX_RESULT."""
+    lim = ent.get("limit") if ent else None
+    try:
+        lim = lim() if callable(lim) else lim
+        return max(500, int(lim)) if lim else MAX_RESULT
+    except (TypeError, ValueError):
+        return MAX_RESULT
+
+
 def run_tool(name, args):
     t0 = time.time()
     ent = _REG.get(name)
@@ -196,4 +208,7 @@ def run_tool(name, args):
         except Exception as e:
             res = f"Ошибка инструмента: {e}"
     log(f"Инструмент {name} {str(args)[:150]} -> {time.time() - t0:.1f} с")
-    return res[:MAX_RESULT]
+    cap = _cap(ent)
+    if len(res) > cap:                                  # модель должна знать, что видит не всё
+        res = res[:cap].rstrip() + "\n[результат обрезан]"
+    return res

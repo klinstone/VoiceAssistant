@@ -247,11 +247,13 @@ class ChatWindow(QMainWindow):
                 self.buf = infl["answer"]
                 self._flush_stream()
         self._set_busy(infl is not None)
-        wake = cfg.WAKE_PHRASE
-        self.view.set_hint(f"Пустой диалог\nСкажите «{wake}» или напишите сообщение ниже")
+        if self.ui.services.voice:
+            self.view.set_hint(f"Пустой диалог\nСкажите «{cfg.WAKE_PHRASE}» или напишите сообщение ниже")
+        else:                                       # режим --chat: микрофона нет
+            self.view.set_hint("Пустой диалог\nНапишите сообщение ниже")
         self.view.scroll_to_end()
         self._update_header(msgs)
-        self.refresh_list()
+        self.refresh_list(keep_scroll=False)        # диалог сменился: список должен показать активный
 
     def _update_header(self, msgs=None):
         if msgs is None:
@@ -292,7 +294,11 @@ class ChatWindow(QMainWindow):
             self.stream.set_text(self.buf)
 
     # ------------------------------ список диалогов ------------------------------
-    def refresh_list(self):
+    def refresh_list(self, keep_scroll=True):
+        """keep_scroll: список перерисовывается после каждого ответа, и без этого он «прыгал» бы к активному диалогу,
+        пока вы листаете старые."""
+        sb = self.list.verticalScrollBar()
+        pos = sb.value()
         cur = str(self.brain.session.path)
         infos = []
         if self.brain.is_draft:
@@ -311,6 +317,9 @@ class ChatWindow(QMainWindow):
             if d["active"]:
                 self.list.setCurrentItem(it)
         self.list.blockSignals(False)
+        if keep_scroll:
+            self.list.doItemsLayout()               # без этого диапазон прокрутки ещё нулевой, и позиция обрезалась бы до 0
+            sb.setValue(pos)
 
     def _picked(self, item):
         d = item.data(Qt.UserRole)
@@ -449,8 +458,10 @@ class ChatWindow(QMainWindow):
 
     def closeEvent(self, e):
         if self.ui.standalone:
-            e.accept()
-            self.ui.quit()
+            if self.ui.quit():
+                e.accept()
+            else:                                   # в окне настроек остались несохранённые правки, и пользователь отказался выходить
+                e.ignore()
         else:
             self.ui.remember_geometry(self, "chat")
             e.ignore()

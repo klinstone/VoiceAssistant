@@ -118,9 +118,9 @@ def open_path(path):
 
 
 def reveal(path):
-    """Показать файл в папке (в проводнике файл будет выделен)."""
+    """Показать файл в папке (в проводнике файл будет выделен). Папку просто открывает."""
     path = str(path)
-    if sys.platform == "win32" and os.path.exists(path):
+    if sys.platform == "win32" and os.path.isfile(path):
         subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
     else:
         open_path(os.path.dirname(path) if os.path.isfile(path) else path)

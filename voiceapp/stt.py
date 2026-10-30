@@ -37,8 +37,10 @@ def transcribe(asr, pcm, fallback_text=""):
     if asr is not None:
         try:
             res = asr.recognize(audio, sample_rate=cfg.SAMPLE_RATE)
+            if res is None:                        # раньше из None получалась строка «None»
+                return ""
             text = res if isinstance(res, str) else getattr(res, "text", str(res))
-            return text.strip()
+            return text.strip()          # пусто = речи нет: это же отсекает «слова» из шума, которые услышал Vosk
         except Exception as e:
             log(f"Ошибка распознавания: {e}")
     return fallback_text.strip()

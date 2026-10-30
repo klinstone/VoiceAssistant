@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidg
 from .. import settings
 from ..log import log
 from ..schema import BY_KEY, FIELDS, GROUPS
+from ..text_utils import norm_text
 from .data_page import DataPage
 from .editors import WIDE, ModelFetcher, make_editor
 
@@ -189,6 +190,7 @@ class SettingsWindow(QMainWindow):
         super().__init__()
         self.ui = ui
         self.rows = {}
+        self.data_page = None
         self.pages = {}                              # id группы -> индекс страницы
         self.setWindowTitle("Настройки")
         self.setWindowIcon(ui.icon("ready"))
@@ -279,7 +281,7 @@ class SettingsWindow(QMainWindow):
             by_group.setdefault(f.group, []).append(f)
         for gid, gtitle in GROUPS:
             if gid == "data":
-                page = DataPage(self.ui)
+                page = self.data_page = DataPage(self.ui)
             else:
                 page = self._settings_page(gtitle, by_group.get(gid, []))
             self.pages[gid] = self.stack.addWidget(page)
@@ -379,12 +381,12 @@ class SettingsWindow(QMainWindow):
         for r in self.dirty_rows():
             v = r.value()
             key = r.f.key
-            if key == "WAKE_PHRASE":
-                v = " ".join(str(v).lower().split()) or settings.default(key)
+            if key == "WAKE_PHRASE":                  # Vosk выдаёт строчные слова без знаков и без «ё»: сравнивать надо так же
+                v = norm_text(str(v)) or settings.default(key)
             if key in ("SILERO_MODELS", "ASR_MODELS", "WAKE_PHRASE", "LLM_MODEL", "SEARCH_REGION", "DEFAULT_CITY") and not v:
                 v = settings.default(key)
-            if key in ("NEW_SESSION_PHRASES",):
-                v = [str(x).lower() for x in v]
+            if key == "NEW_SESSION_PHRASES":          # пустой список допустим: голосовой сброс просто выключен
+                v = [p for p in (norm_text(str(x)) for x in v) if p]
             (env if r.f.env else changes)[key] = v
         try:
             if changes:
@@ -398,8 +400,13 @@ class SettingsWindow(QMainWindow):
             self.ui.services.brain.reset_client()
         need_restart = any(BY_KEY[k].restart for k in (*changes, *env))
         for r in self.rows.values():
-            if r.f.key in changes or r.f.key in env:
-                r.commit()
+            key = r.f.key
+            if key in changes or key in env:
+                stored = changes[key] if key in changes else env[key]
+                if _same(r.value(), stored):
+                    r.commit()
+                else:
+                    r.reload(stored)                  # в поле показываем то, что реально сохранено (после нормализации)
         self.ui.settings_saved({*changes, *env})
         log("Настройки сохранены: " + ", ".join([*changes, *env]))
         if need_restart:
@@ -432,24 +439,42 @@ class SettingsWindow(QMainWindow):
         self._update_footer()
         self.flash("Настройки сброшены.")
 
+    def confirm_close(self):
+        """Если есть несохранённые правки (настройки или заметки/память на странице «Данные и файлы»),
+        спрашивает, что с ними делать. False: пользователь передумал, закрывать нельзя."""
+        rows = self.dirty_rows()
+        data_dirty = self.data_page is not None and self.data_page.is_dirty()
+        if not rows and not data_dirty:
+            return True
+        what = []
+        if rows:
+            what.append(f"настройки ({len(rows)})")
+        if data_dirty:
+            what.append("заметки или память")
+        box = QMessageBox(self)
+        box.setWindowTitle("Настройки")
+        box.setText("Есть несохранённые изменения: " + ", ".join(what) + ".")
+        save = box.addButton("Сохранить", QMessageBox.AcceptRole)
+        drop = box.addButton("Не сохранять", QMessageBox.DestructiveRole)
+        box.addButton("Отмена", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save:
+            if rows and not self.save():
+                return False
+            if data_dirty:
+                self.data_page.save_all()
+            return True
+        if clicked is drop:
+            self.revert()
+            if data_dirty:
+                self.data_page.load(force=True)
+            return True
+        return False
+
     def closeEvent(self, e):
-        d = self.dirty_rows()
-        if d:
-            box = QMessageBox(self)
-            box.setWindowTitle("Настройки")
-            box.setText(f"Есть несохранённые изменения ({len(d)}).")
-            save = box.addButton("Сохранить", QMessageBox.AcceptRole)
-            drop = box.addButton("Не сохранять", QMessageBox.DestructiveRole)
-            box.addButton("Отмена", QMessageBox.RejectRole)
-            box.exec()
-            if box.clickedButton() is save:
-                if not self.save():
-                    e.ignore()
-                    return
-            elif box.clickedButton() is drop:
-                self.revert()
-            else:
-                e.ignore()
-                return
+        if not self.confirm_close():
+            e.ignore()
+            return
         self.ui.remember_geometry(self, "settings")
         e.accept()

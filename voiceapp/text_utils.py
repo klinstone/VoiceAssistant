@@ -41,8 +41,12 @@ def numbers_to_words(t):
     return re.sub(r"\d+(?:[.,]\d+)?", repl, t)
 
 
+_THOUSANDS = re.compile(r"(?<![\w.,])\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?!\w)")
+
+
 def clean_for_tts(t, strict=False):
     t = re.sub(r"https?://\S+", "", t)
+    t = _THOUSANDS.sub(lambda m: re.sub(r"\D", "", m.group()), t)      # «1 000» читалось как «один ноль»
     t = re.sub(r"[*_`#>~|]+", "", t)
     t = t.replace("°C", " градусов").replace("°", " градусов").replace("%", " процентов")
     t = re.sub(r"(?<![\w])-(?=\d)", "минус ", t)
@@ -77,10 +81,11 @@ class Chunker:
                 cut = self.buf.rfind(", ", 0, 220)
                 if cut < 60:
                     cut = self.buf.rfind(" ", 0, 220)
-                if cut > 0:
-                    out.append(self.buf[:cut + 1].strip())
-                    self.buf = self.buf[cut + 1:]
-                    continue
+                if cut <= 0:
+                    cut = 219                       # длинная строка без пробелов (ссылка, base64): режем жёстко
+                out.append(self.buf[:cut + 1].strip())
+                self.buf = self.buf[cut + 1:]
+                continue
             break
         return out
 
@@ -99,11 +104,12 @@ def fuzzy_contains(text, phrases, threshold=0.8):
     """Есть ли в тексте одна из фраз (с допуском на неточное распознавание)."""
     t = norm_text(text)
     words = t.split()
+    padded = f" {t} "
     for ph in phrases:
         p = norm_text(ph)
         if not p:
             continue
-        if p in t:
+        if f" {p} " in padded:                       # по границам слов: «эй роботный» не считается за «эй робот»
             return True
         n = len(p.split())
         for i in range(max(1, len(words) - n + 1)):

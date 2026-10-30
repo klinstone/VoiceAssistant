@@ -111,10 +111,18 @@ class Scheduler:
         try:
             with open(self._path(), encoding="utf-8") as f:
                 data = json.load(f)
-            self._items = [i for i in data.get("items", []) if "when" in i]
-            self._next_id = int(data.get("next_id", 1))
-        except (OSError, ValueError):
-            pass
+            if not isinstance(data, dict):          # файл правили руками или он повреждён
+                raise ValueError("ожидался объект")
+            items = [i for i in data.get("items", []) if isinstance(i, dict) and isinstance(i.get("when"), (int, float))]
+            next_id = int(data.get("next_id", 1))
+        except (OSError, ValueError, TypeError):
+            return
+        self._next_id = max(next_id, max((i["id"] for i in items if isinstance(i.get("id"), int)), default=0) + 1)
+        for i in items:
+            if not isinstance(i.get("id"), int):
+                i["id"] = self._next_id
+                self._next_id += 1
+        self._items = items
 
     def _save(self):
         p = self._path()

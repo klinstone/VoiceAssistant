@@ -62,7 +62,25 @@ class Info:
     count: int
 
 
+_summary_cache = {}      # путь -> ((время изменения, размер), результат): файл диалога только дописывается, размер выдаст изменение
+
+
 def _summary(path):
+    """Заголовок и число реплик с кэшем: окно обновляет список после каждого ответа, а читать заново нужно только изменившиеся файлы."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _summary_cache.get(str(path))
+    if hit and hit[0] == key:
+        return hit[1]
+    result = _read_summary(path)
+    _summary_cache[str(path)] = (key, result)
+    return result
+
+
+def _read_summary(path):
     """Заголовок и число реплик. JSON разбирается только до первой реплики пользователя,
     остальное лишь считается построчно: список диалогов открывается быстро даже при сотнях файлов."""
     title, count = None, 0
@@ -106,6 +124,7 @@ def list_sessions():
 
 
 def delete(path):
+    _summary_cache.pop(str(path), None)
     try:
         Path(path).unlink()
     except OSError:

@@ -148,7 +148,12 @@ class UiApp:
         self._front(self.settings_win)
 
     # ------------------------------ жизненный цикл ------------------------------
-    def quit(self):
+    def _confirm_exit(self):
+        """Окно настроек открыто с несохранёнными правками: спросить, что с ними делать. False: не выходить."""
+        w = self.settings_win
+        return w is None or not w.isVisible() or w.confirm_close()
+
+    def _shutdown(self):
         for w, n in ((self.chat, "chat"), (self.settings_win, "settings")):
             if w is not None:
                 self.remember_geometry(w, n)
@@ -156,14 +161,24 @@ class UiApp:
         self.tray.hide()
         self.app.quit()
 
+    def quit(self):
+        """Выйти из программы. Возвращает False, если пользователь передумал (остались несохранённые правки)."""
+        if not self._confirm_exit():
+            return False
+        self._shutdown()
+        return True
+
     def restart(self):
+        if not self._confirm_exit():                # спрашиваем ДО запуска новой копии программы
+            return
         self._restart = True
         if self.services.restart:
             self.services.restart()
-        self.quit()
+        self._shutdown()
 
     def run(self, show_chat=False):
         """Блокирует до выхода. Возвращает True, если нужно перезапустить программу."""
+        from ..log import log
         self.tray.show()
         if show_chat or settings.get("UI_OPEN_ON_START") or not self.tray.available:
             QTimer.singleShot(0, self.open_chat)

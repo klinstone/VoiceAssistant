@@ -62,6 +62,8 @@ def calculate(expression):
         return "Ошибка: деление на ноль."
     except (ValueError, SyntaxError, TypeError, OverflowError, RecursionError) as e:
         return f"Ошибка вычисления: {e}"
+    if isinstance(value, complex):                       # например (-8) ** (1/3): модели нужен понятный отказ, а не «1+1.7j»
+        return "Результат не вещественное число."
     if isinstance(value, float):
         if value != value or value in (math.inf, -math.inf):
             return "Результат не определён."
