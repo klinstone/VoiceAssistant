@@ -322,6 +322,15 @@ class SettingsWindow(QMainWindow):
             if self.nav.item(i).data(Qt.UserRole) == gid:
                 self.nav.setCurrentRow(i)
 
+    def focus_setting(self, key):
+        """Открыть страницу с настройкой и поставить курсор в её поле (например, в поле ключа OpenRouter)."""
+        row = self.rows.get(key)
+        if row is None:
+            return
+        self.select_page(row.f.group)
+        w = row.ed.widget
+        getattr(w, "line", w).setFocus()            # у SecretEdit поле ввода называется line
+
     def _page_changed(self, row):
         if row >= 0:
             gid = self.nav.item(row).data(Qt.UserRole)

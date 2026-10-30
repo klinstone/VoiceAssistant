@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent.parent
+from .paths import BASE      # рядом с исходниками или (в exe) рядом с .exe
 CACHE = BASE / "cache"
 VOSK_DIR = BASE / "vosk_model"
 

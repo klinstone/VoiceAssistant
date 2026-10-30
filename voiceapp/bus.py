@@ -15,6 +15,7 @@
   VOICE_PARTIAL    text                     — то, что вы говорите, пока идёт запись ("" = запись закончена)
   STATE            state, text              — состояние голосовой части: idle/ready/listening/thinking/speaking/error
   NOTIFY           title, text              — показать уведомление (сработал таймер)
+  OPEN_SETTINGS    page, focus              — попросить интерфейс открыть настройки (page: id группы, focus: ключ настройки)
 """
 import threading
 import traceback
@@ -30,6 +31,7 @@ SESSIONS_UPDATED = "sessions_updated"
 VOICE_PARTIAL = "voice_partial"
 STATE = "state"
 NOTIFY = "notify"
+OPEN_SETTINGS = "open_settings"
 
 _REMEMBER = {STATE}          # для этих событий хранится последнее значение (окно, открытое позже, узнает состояние)
 _subs = {}

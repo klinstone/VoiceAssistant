@@ -12,10 +12,14 @@ from . import bus
 from . import config as cfg
 from . import settings
 from .audio import Mic, Speaker, chime_alarm, chime_reset, chime_start, chime_stop, load_tts
+from .client import has_key
 from .log import log
 from .reminders import SCHEDULER
 from .stt import load_asr, transcribe
 from .text_utils import HAS_NUM2WORDS, fuzzy_contains, norm_text, split_after_phrase
+
+
+NEED_KEY_PHRASE = "Введите апи ключ в настройках."     # произносится, если кодовое слово сказано, а ключа нет
 
 
 def is_new_session(text):
@@ -303,6 +307,15 @@ class Assistant:
             time.sleep(3)
             return old
 
+    def need_key(self):
+        """Кодовое слово сказано, а ключа OpenRouter нет: просим ввести его и открываем настройки."""
+        log("Нет ключа OpenRouter: открываю настройки.")
+        bus.emit(bus.NOTIFY, title="Ассистент", text="Введите ключ OpenRouter в настройках.")
+        bus.emit(bus.OPEN_SETTINGS, page="model", focus="OPENROUTER_API_KEY")
+        if self.speaker is not None:
+            self.speaker.say(NEED_KEY_PHRASE)
+            self.speaker.wait()
+
     def run(self):
         from vosk import KaldiRecognizer
         self.load()
@@ -358,7 +371,10 @@ class Assistant:
             log("Кодовое слово!")
             self.silence()                          # если звенел таймер, сигнал прекращаем
             try:
-                self.conversation(mic, preroll=preroll)
+                if has_key():
+                    self.conversation(mic, preroll=preroll)
+                else:
+                    self.need_key()
             except Exception:
                 traceback.print_exc()
             mic.drain()

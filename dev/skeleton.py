@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP = {"venv", ".git", "cache", "data", "sessions", "vosk_model", "__pycache__"}
+SKIP = {"venv", ".git", "cache", "data", "sessions", "vosk_model", "__pycache__", "build", "dist"}
 
 
 def sig(fn):

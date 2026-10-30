@@ -138,7 +138,8 @@ class UiApp:
             self.restore_geometry(self.chat, "chat")
         self._front(self.chat)
 
-    def open_settings(self, page=None):
+    def open_settings(self, page=None, focus=None):
+        """page: id группы (например "model"), focus: ключ настройки, в поле которой нужно поставить курсор."""
         if self.settings_win is None:
             from .settings_window import SettingsWindow
             self.settings_win = SettingsWindow(self)
@@ -146,6 +147,8 @@ class UiApp:
         if page:
             self.settings_win.select_page(page)
         self._front(self.settings_win)
+        if focus:
+            self.settings_win.focus_setting(focus)
 
     # ------------------------------ жизненный цикл ------------------------------
     def _confirm_exit(self):
@@ -178,7 +181,6 @@ class UiApp:
 
     def run(self, show_chat=False):
         """Блокирует до выхода. Возвращает True, если нужно перезапустить программу."""
-        from ..log import log
         self.tray.show()
         if show_chat or settings.get("UI_OPEN_ON_START") or not self.tray.available:
             QTimer.singleShot(0, self.open_chat)

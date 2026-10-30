@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voiceassistant"
+version = "0.1.0"
+description = "Customizable PC voice assistant: wake word, Vosk + GigaAM + Silero, LLM with tools, PySide6 chat"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # интерфейс
+    "PySide6-Essentials",
+    # голос: микрофон, кодовое слово, распознавание, озвучка
+    "sounddevice",
+    "numpy",
+    "vosk",
+    "onnx-asr",
+    "onnxruntime",
+    "huggingface_hub",          # onnx-asr скачивает модели GigaAM через него
+    "torch",
+    "silero",
+    "num2words",
+    # модель и инструменты
+    "openai",
+    "python-dotenv",
+    "requests",
+    "ddgs",
+    "trafilatura",
+    "lxml_html_clean",          # нужен trafilatura/justext при lxml 5.2+
+    "youtube-transcript-api",
+    # управление ПК
+    "psutil",
+    "pyperclip",
+    "pillow",
+    "pycaw; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller"]
+dev = ["deptry", "pipdeptree"]
+
+[tool.setuptools]
+packages = ["voiceapp", "voiceapp.ui"]
+
+# python -m deptry .  — сверяет импорты в коде с зависимостями выше
+[tool.deptry]
+extend_exclude = ["dev", "build", "dist"]
+
+[tool.deptry.package_module_name_map]
+PySide6-Essentials = "PySide6"
+python-dotenv = "dotenv"
+pillow = "PIL"
+onnx-asr = "onnx_asr"
+youtube-transcript-api = "youtube_transcript_api"
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["onnxruntime", "huggingface_hub", "lxml_html_clean"]   # нужны во время работы, но в коде не импортируются
+DEP003 = ["comtypes"]                                            # приходит вместе с pycaw

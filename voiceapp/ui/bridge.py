@@ -18,6 +18,7 @@ class Bridge(QObject):
     voice_partial = Signal(str)
     state = Signal(str, str)                    # состояние, подпись
     notify = Signal(str, str)                   # заголовок, текст
+    open_settings = Signal(str, str)            # страница, ключ настройки (куда поставить курсор)
 
     def __init__(self):
         super().__init__()
@@ -33,3 +34,4 @@ class Bridge(QObject):
         s(bus.VOICE_PARTIAL, lambda text: self.voice_partial.emit(text))
         s(bus.STATE, lambda state, text: self.state.emit(state, text))
         s(bus.NOTIFY, lambda title, text: self.notify.emit(title, text))
+        s(bus.OPEN_SETTINGS, lambda page, focus: self.open_settings.emit(page, focus))

@@ -3,9 +3,8 @@
 import os
 import sys
 import time
-from pathlib import Path
 
-_BASE = Path(__file__).resolve().parent.parent
+from .paths import BASE as _BASE
 _LOG_MAX = 5 * 1024 * 1024        # больше 5 МБ: старый лог переименовывается в assistant.log.old
 
 if sys.stdout is None or sys.stderr is None:

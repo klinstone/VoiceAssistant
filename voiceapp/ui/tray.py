@@ -26,6 +26,7 @@ class TrayIcon(QObject):
         self.icon.activated.connect(self._activated)
         ui.bridge.state.connect(self.on_state)
         ui.bridge.notify.connect(self.on_notify)
+        ui.bridge.open_settings.connect(self.on_open_settings)
 
     def _action(self, text, fn, bold=False):
         a = QAction(text, self.menu)
@@ -56,3 +57,7 @@ class TrayIcon(QObject):
     def on_notify(self, title, text):
         if self.available:
             self.icon.showMessage(title, text[:250], QSystemTrayIcon.Information, 6000)
+
+    @Slot(str, str)
+    def on_open_settings(self, page, focus):
+        self.ui.open_settings(page or None, focus or None)

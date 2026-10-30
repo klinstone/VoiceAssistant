@@ -1,0 +1,53 @@
+name: Build Windows release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            constraints.txt
+
+      # torch с PyPI под Windows уже CPU-версия, отдельный индекс не нужен
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[build]" -c constraints.txt
+
+      - name: Download Vosk model
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip" -OutFile vosk.zip
+          Expand-Archive vosk.zip -DestinationPath vosk_tmp
+          $dir = Get-ChildItem vosk_tmp -Directory | Select-Object -First 1
+          Move-Item $dir.FullName vosk_model
+
+      - name: Build
+        run: python dev/build_exe.py
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: VoiceAssistant-windows
+          path: dist/VoiceAssistant-windows.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/VoiceAssistant-windows.zip
+          generate_release_notes: true

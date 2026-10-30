@@ -35,8 +35,11 @@ def _restart_process():
     import subprocess
     env = dict(os.environ, VOICEAPP_RESTARTED="1")
     flags = 0x08000000 if sys.platform == "win32" else 0          # CREATE_NO_WINDOW
-    subprocess.Popen([sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]],
-                     env=env, cwd=str(cfg.BASE), creationflags=flags, close_fds=True)
+    if getattr(sys, "frozen", False):                             # exe: sys.executable и есть программа
+        cmd = [sys.executable, *sys.argv[1:]]
+    else:
+        cmd = [sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]]
+    subprocess.Popen(cmd, env=env, cwd=str(cfg.BASE), creationflags=flags, close_fds=True)
 
 
 def _run_tool_cli(parts):
@@ -68,6 +71,8 @@ def _run_tool_cli(parts):
 
 
 def main():
+    if getattr(sys, "frozen", False):
+        os.chdir(cfg.BASE)                              # silero пишет latest_silero_models.yml в текущую папку
     from .core import Assistant
     ap = argparse.ArgumentParser()
     ap.add_argument("--devices", action="store_true", help="список аудиоустройств")
