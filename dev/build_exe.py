@@ -20,6 +20,7 @@ COLLECT_ALL = ["silero", "vosk", "onnx_asr", "onnxruntime", "sounddevice", "_sou
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")      # на сервере GitHub консоль в cp1252: кириллица в print роняла скрипт
     try:
         import PyInstaller.__main__ as pyi
     except ImportError:
